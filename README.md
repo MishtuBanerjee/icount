@@ -27,7 +27,7 @@ _________________
 
 DATA FORMAT
 
-|Date|Time|Event|ObservationID|ObservationType|ObservedVariable|ObservationValue|ObservationConfidence|Observer|Subject|
+|Date|Time|Event|ObservationID|ObservationType|ObservedVariable|ObservationValue|ObservationConfidence|Observer|Subject|Comments|
 
 
 _________________
