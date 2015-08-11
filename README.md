@@ -35,6 +35,18 @@ _________________
 BASIC CALCULATIONS
 
 
+_________________
+
+DATA MODEL
+
+Note -- this section is more technical, and shows how the 11 columns are related via a relational data model. The data model allows construction of software to simplify data entry and querying the data.
+
+Entities:
+- people (and roles)
+- observations and observation types
+- variables
+- observation values and confidence
+- comment; essentially a special kind of variable
 
 _________________
 
