@@ -20,11 +20,14 @@ _________________
 CODING PROTOCOL
 
 
+Mention ABC tracking form
+Mention purpose of behaviour
+
 _________________
 
 DATA FORMAT
 
-|Date|Time|Event|ObservationID|ObservedVariable|ObservationValue|ObservationConfidence|Observer|Subject|
+|Date|Time|Event|ObservationID|ObservationType|ObservedVariable|ObservationValue|ObservationConfidence|Observer|Subject|
 
 
 _________________
