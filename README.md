@@ -24,15 +24,19 @@ _________________
 
 DATA FORMAT
 
+|Date | Time | Event | Observation | Value | Confidence | Observer |
+
 
 _________________
 
 BASIC CALCULATIONS
 
 
-REFERENCES
-
-- Tidy Data
 
 _________________
 
+REFERENCES
+
+- Wickham, H. 2014. [Tidy Data](http://www.jstatsoft.org/v59/i10/paper)
+
+_________________
