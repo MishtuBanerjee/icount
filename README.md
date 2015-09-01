@@ -19,6 +19,8 @@ _________________
 
 CODING PROTOCOL
 
+The coding protocol is designed to handle development of qualitative codes from observing events, as well as quantitative measures that might come from various monitoring devices. It allows you to develop a customized coding system.
+
 
 Mention ABC tracking form
 Mention purpose of behaviour
@@ -52,7 +54,8 @@ _________________
 
 REFERENCES
 
-- Wickham, H. 2014. [Tidy Data](http://www.jstatsoft.org/v59/i10/paper)
 - Bijou, et al. 1968 [ABC Monitoring](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC1310995/pdf/jaba00084-0079.pdf)
+- Hempel,C.G. 1966. Philosophy of Data Science. Prentice Hall.
+- Wickham, H. 2014. [Tidy Data](http://www.jstatsoft.org/v59/i10/paper)
 
 _________________
