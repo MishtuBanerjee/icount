@@ -57,6 +57,7 @@ REFERENCES
 - Bijou, et al. 1968 [ABC Monitoring](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC1310995/pdf/jaba00084-0079.pdf)
 - Hempel,C.G. 1966. Philosophy of Data Science. Prentice Hall.
 - Hilbe, J.H. 2014. Modelling Count Data.
+- Pearl, J. 2000. Causality. Models, Reasoning, and Inference. Cambridge University Press.
 - Wickham, H. 2014. [Tidy Data](http://www.jstatsoft.org/v59/i10/paper)
 
 _________________
