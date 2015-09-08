@@ -55,9 +55,11 @@ _________________
 REFERENCES
 
 - Bijou, et al. 1968 [ABC Monitoring](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC1310995/pdf/jaba00084-0079.pdf)
-- Hempel,C.G. 1966. Philosophy of Data Science. Prentice Hall.
-- Hilbe, J.H. 2014. Modelling Count Data.
+- Easley, D. and Kleinberg, 2010. J. Networks, Crowds, and Markets. Reasoning About A Highly Connected World. Cambridge University Press.
+- Hempel,C.G. 1966. Philosophy of Natural Science. Prentice Hall.
+- Hilbe, J.H. 2014. Modelling Count Data. Cambridge University Press.
 - Pearl, J. 2000. Causality. Models, Reasoning, and Inference. Cambridge University Press.
+- Stone, J.V. 2013. Bayes' Rule. A Tutorial Introduction to Bayesian Analysis. Sebtel Press.
 - Wickham, H. 2014. [Tidy Data](http://www.jstatsoft.org/v59/i10/paper)
 
 _________________
