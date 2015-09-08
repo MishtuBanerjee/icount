@@ -55,8 +55,9 @@ _________________
 REFERENCES
 
 - Bijou, et al. 1968 [ABC Monitoring](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC1310995/pdf/jaba00084-0079.pdf)
-- Downey, a.B. 2012. [Think Bayes](http://www.greenteapress.com/thinkbayes/)
+- Downey, A.B. 2012. [Think Bayes. Bayesian Statistics Made Simple](http://www.greenteapress.com/thinkbayes/). Green Tea Press.
 - Easley, D. and Kleinberg, 2010. J. Networks, Crowds, and Markets. Reasoning About A Highly Connected World. Cambridge University Press.
+Good. P.I. 2005. Introduction to Statistics Through Resampling Methods and R/S-Plus. Wiley-Interscience.
 - Guilhoto et al. 2011. [Higher evening antiepileptic drug dose for nocturnal and early-morning seizures](http://www.sciencedirect.com/science/article/pii/S1525505010007365) Epilepsy and Behaviour 20:334-337.
 - Hempel,C.G. 1966. Philosophy of Natural Science. Prentice Hall.
 - Hilbe, J.H. 2014. Modelling Count Data. Cambridge University Press.
