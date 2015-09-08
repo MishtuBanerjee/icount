@@ -54,7 +54,8 @@ _________________
 
 REFERENCES
 
-- Bijou, et al. 1968 [ABC Monitoring](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC1310995/pdf/jaba00084-0079.pdf)
+- Bijou, et al. 1968 [
+A Method To INtegrate DEscriptive And EXperimental FIeld STudies At the LEvel of DAta and Empirical Concepts](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC1310995/pdf/jaba00084-0079.pdf).
 - Downey, A.B. 2012. [Think Bayes. Bayesian Statistics Made Simple](http://www.greenteapress.com/thinkbayes/). Green Tea Press.
 - Easley, D. and Kleinberg, 2010. J. Networks, Crowds, and Markets. Reasoning About A Highly Connected World. Cambridge University Press.
 - Fallik, D. 2012. [Treating Epileptic Seizures in Kids by the Clock
@@ -67,6 +68,6 @@ REFERENCES
 - Pearl, J. 2000. Causality. Models, Reasoning, and Inference. Cambridge University Press.
 - Ramgopal et al. 2014. [Seizure detection, seizure prediction, and closed-loop warning systems in epilepsy](http://www.sciencedirect.com/science/article/pii/S1525505014002297) Epilepsy and Behaviour. 37: 291-307.
 - Stone, J.V. 2013. Bayes' Rule. A Tutorial Introduction to Bayesian Analysis. Sebtel Press.
-- Wickham, H. 2014. [Tidy Data](http://www.jstatsoft.org/v59/i10/paper)
+- Wickham, H. 2014. [Tidy Data](http://www.jstatsoft.org/v59/i10/paper) Journal of Statistical Software 59: 10
 
 _________________
