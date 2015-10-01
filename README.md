@@ -24,7 +24,7 @@ The coding protocol is designed to handle development of qualitative codes from 
 
 Mention ABC tracking form
 Mention purpose of behaviour
-
+Break coding protocol into finding variables and refining coded variables
 _________________
 
 DATA FORMAT
