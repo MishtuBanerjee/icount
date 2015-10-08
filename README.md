@@ -1,5 +1,7 @@
 # icount
-A personalized log to track, monitor, and analyze health information for chronic conditions 
+A personalized log to track, monitor, and analyze health information for chronic health conditions 
+
+
 
 ________________
 
