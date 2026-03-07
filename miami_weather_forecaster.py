@@ -11,6 +11,8 @@ Data source: https://api.weather.gov  (no API key required)
 
 import sys
 import requests
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
 import matplotlib
 matplotlib.use("Agg")           # headless – saves to file instead of displaying
 import matplotlib.pyplot as plt
@@ -181,6 +183,92 @@ def temperature_trend(summaries):
     return num / den if den else 0.0
 
 # ---------------------------------------------------------------------------
+# Tree model: hourly observations → RandomForest temperature forecast
+# ---------------------------------------------------------------------------
+
+FEATURE_KEYS = ["hour", "day_of_year", "humidity", "wind_mph", "dewpoint_f"]
+TRAIN_DAYS   = 11   # hold out last 3 days of the 14-day window as test set
+
+
+def parse_hourly_observations(features):
+    """
+    Convert raw NWS observation GeoJSON features into a flat list of hourly
+    records suitable for ML. Records with missing temperature are dropped.
+    Sorted chronologically.
+    """
+    records = []
+    for feat in features:
+        p      = feat.get("properties", {})
+        ts_str = p.get("timestamp")
+        if not ts_str:
+            continue
+
+        ts       = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        temp_c   = (p.get("temperature")       or {}).get("value")
+        dew_c    = (p.get("dewpoint")          or {}).get("value")
+        humidity = (p.get("relativeHumidity")  or {}).get("value")
+        wind_ms  = (p.get("windSpeed")         or {}).get("value")
+
+        if temp_c is None:
+            continue
+
+        records.append({
+            "timestamp":  ts,
+            "hour":       ts.hour,
+            "day_of_year": ts.timetuple().tm_yday,
+            "temp_f":     c_to_f(temp_c),
+            "dewpoint_f": c_to_f(dew_c)        if dew_c    is not None else np.nan,
+            "humidity":   humidity              if humidity is not None else np.nan,
+            "wind_mph":   ms_to_mph(wind_ms)    if wind_ms  is not None else np.nan,
+        })
+
+    records.sort(key=lambda r: r["timestamp"])
+    return records
+
+
+def _records_to_xy(records):
+    X = np.array([[r[k] if not (isinstance(r[k], float) and np.isnan(r[k])) else 0.0
+                   for k in FEATURE_KEYS]
+                  for r in records], dtype=float)
+    y = np.array([r["temp_f"] for r in records], dtype=float)
+    return X, y
+
+
+def build_tree_model(hourly_records):
+    """
+    Split the 14-day hourly observations into train (first TRAIN_DAYS days)
+    and test (last 3 days).  Fit a RandomForestRegressor on the training
+    portion and predict on the test portion.
+
+    Returns (timestamps, actuals, predictions) — parallel lists for the
+    test window — or empty lists if data is insufficient.
+    """
+    all_dates = sorted({r["timestamp"].strftime("%Y-%m-%d") for r in hourly_records})
+    if len(all_dates) < 4:
+        return [], [], []
+
+    # Last 3 calendar days are the test set
+    test_start_str = all_dates[-3]
+    test_start = datetime.strptime(test_start_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+    train = [r for r in hourly_records if r["timestamp"] <  test_start]
+    test  = [r for r in hourly_records if r["timestamp"] >= test_start]
+
+    if len(train) < 10 or len(test) < 1:
+        return [], [], []
+
+    X_train, y_train = _records_to_xy(train)
+    X_test,  y_test  = _records_to_xy(test)
+    ts_test = [r["timestamp"] for r in test]
+
+    model = RandomForestRegressor(n_estimators=150, random_state=42, n_jobs=-1)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    return ts_test, y_test.tolist(), y_pred.tolist()
+
+
+# ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
 
@@ -286,6 +374,101 @@ def display_forecast(periods):
             print(_wrap(detail, indent=19, width=W))
     print()
     print(hr())
+
+# ---------------------------------------------------------------------------
+# Forecast-error chart  (tree model predictions vs actual observations)
+# ---------------------------------------------------------------------------
+
+def chart_forecast_errors(
+    timestamps, actuals, predictions,
+    output_path="miami_forecast_error_chart.png",
+):
+    """
+    Two-panel chart:
+      Top    – actual °F vs tree-model predicted °F over the 3-day test window
+      Bottom – hourly error bars (predicted − actual) with MAE / RMSE annotation
+    """
+    if not timestamps:
+        print("  WARNING: no error data to plot; skipping error chart.")
+        return
+
+    miami_tz = timezone(timedelta(hours=-5))
+    ts_local = [t.astimezone(miami_tz) for t in timestamps]
+
+    errors = [p - a for p, a in zip(predictions, actuals)]
+    mae    = sum(abs(e) for e in errors) / len(errors)
+    rmse   = (sum(e ** 2 for e in errors) / len(errors)) ** 0.5
+    bias   = sum(errors) / len(errors)
+
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(13, 8), sharex=True,
+        gridspec_kw={"height_ratios": [2, 1]},
+    )
+    fig.patch.set_facecolor("#1a1a2e")
+    for ax in (ax1, ax2):
+        ax.set_facecolor("#16213e")
+        ax.tick_params(colors="#e0e0e0", labelsize=8)
+        ax.spines[:].set_color("#444466")
+
+    # ── Top: actual vs predicted ──────────────────────────────────────────
+    ax1.plot(ts_local, actuals,     color="#ff6b6b", linewidth=2,
+             label="Actual °F")
+    ax1.plot(ts_local, predictions, color="#ffd700", linewidth=2,
+             linestyle="--", label="RandomForest predicted °F")
+    ax1.fill_between(ts_local, actuals, predictions,
+                     color="#888800", alpha=0.12, label="Error band")
+    ax1.set_ylabel("Temperature (°F)", color="#e0e0e0", fontsize=9)
+    ax1.yaxis.label.set_color("#e0e0e0")
+    ax1.tick_params(axis="y", colors="#e0e0e0")
+    ax1.legend(loc="upper right", facecolor="#1a1a2e",
+               edgecolor="#444466", labelcolor="#e0e0e0", fontsize=8)
+    ax1.set_title(
+        "Miami 3-Day Forecast Error  —  RandomForest Tree Model vs Actual Observations",
+        color="#e0e0e0", fontsize=11, pad=10,
+    )
+    ax1.grid(axis="y", color="#2a2a4a", linewidth=0.6)
+
+    # ── Bottom: error bars ────────────────────────────────────────────────
+    bar_colors = ["#ff4444" if e > 0 else "#44aaff" for e in errors]
+    ax2.bar(ts_local, errors, width=timedelta(hours=0.8),
+            color=bar_colors, alpha=0.85, label="Error (pred − actual)")
+    ax2.axhline(0, color="#aaaacc", linewidth=0.9, linestyle="-")
+    ax2.set_ylabel("Error (°F)", color="#e0e0e0", fontsize=9)
+    ax2.yaxis.label.set_color("#e0e0e0")
+    ax2.tick_params(axis="y", colors="#e0e0e0")
+    ax2.legend(loc="upper right", facecolor="#1a1a2e",
+               edgecolor="#444466", labelcolor="#e0e0e0", fontsize=8)
+    ax2.grid(axis="y", color="#2a2a4a", linewidth=0.6)
+
+    # Metrics as x-axis label
+    ax2.set_xlabel(
+        f"MAE = {mae:.2f}°F    RMSE = {rmse:.2f}°F    Bias = {bias:+.2f}°F"
+        f"    (red = over-predicted, blue = under-predicted)",
+        color="#aaaacc", fontsize=8.5,
+    )
+    ax2.xaxis.label.set_color("#aaaacc")
+
+    # ── Shared x-axis ─────────────────────────────────────────────────────
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%a\n%-I %p", tz=miami_tz))
+    ax2.xaxis.set_major_locator(mdates.HourLocator(byhour=[0, 6, 12, 18], tz=miami_tz))
+    ax2.tick_params(axis="x", colors="#e0e0e0", labelsize=7.5)
+
+    # Day-boundary verticals
+    if ts_local:
+        day0 = ts_local[0].replace(hour=0, minute=0, second=0, microsecond=0)
+        for d in range(1, 4):
+            boundary = day0 + timedelta(days=d)
+            for ax in (ax1, ax2):
+                ax.axvline(boundary, color="#555577", linewidth=0.8, linestyle=":")
+
+    fig.autofmt_xdate(rotation=0, ha="center")
+    plt.tight_layout(h_pad=0.4)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print(f"  Chart saved → {output_path}")
+    print(f"  Tree model  MAE={mae:.2f}°F  RMSE={rmse:.2f}°F  Bias={bias:+.2f}°F")
+
 
 # ---------------------------------------------------------------------------
 # Hourly chart
@@ -479,6 +662,20 @@ def main():
 
     display_historical(summaries)
     display_two_week_summary(summaries)
+
+    # --- tree model: train on first 11 days, evaluate on last 3 ----------
+    print(f"\n  [2b/3] Building RandomForest tree model & evaluating 3-day forecast error …")
+    try:
+        hourly_records = parse_hourly_observations(features)
+        ts_test, actuals, predictions = build_tree_model(hourly_records)
+        if ts_test:
+            print(f"        {len(hourly_records)} hourly obs  →  "
+                  f"test window {len(ts_test)} hours")
+            chart_forecast_errors(ts_test, actuals, predictions)
+        else:
+            print("        Insufficient data for tree model evaluation.")
+    except Exception as exc:
+        print(f"  WARNING: tree model error — {exc}")
 
     # --- 3-day forecast ---------------------------------------------------
     print(f"\n  [3/3] Fetching 3-day NWS forecast …")
