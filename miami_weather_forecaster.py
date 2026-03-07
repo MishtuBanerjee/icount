@@ -11,6 +11,10 @@ Data source: https://api.weather.gov  (no API key required)
 
 import sys
 import requests
+import matplotlib
+matplotlib.use("Agg")           # headless – saves to file instead of displaying
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
@@ -81,6 +85,12 @@ def get_observations(station_id, days=HISTORY_DAYS):
 def get_forecast(grid_id, grid_x, grid_y):
     """Return forecast period list from NWS gridpoint forecast."""
     data = _get(f"{NWS_BASE}/gridpoints/{grid_id}/{grid_x},{grid_y}/forecast")
+    return data.get("properties", {}).get("periods", [])
+
+
+def get_hourly_forecast(grid_id, grid_x, grid_y):
+    """Return hourly forecast period list from NWS gridpoint hourly forecast."""
+    data = _get(f"{NWS_BASE}/gridpoints/{grid_id}/{grid_x},{grid_y}/forecast/hourly")
     return data.get("properties", {}).get("periods", [])
 
 # ---------------------------------------------------------------------------
@@ -278,6 +288,163 @@ def display_forecast(periods):
     print(hr())
 
 # ---------------------------------------------------------------------------
+# Hourly chart
+# ---------------------------------------------------------------------------
+
+def parse_hourly_periods(periods, start_dt):
+    """
+    Filter hourly NWS forecast periods to those at or after *start_dt*
+    and within 3 days of it.  Returns parallel lists (timestamps, temps_f,
+    precip_pct, wind_mph).
+    """
+    end_dt = start_dt + timedelta(days=3)
+    timestamps, temps, precips, winds = [], [], [], []
+
+    for p in periods:
+        ts_str = p.get("startTime", "")
+        if not ts_str:
+            continue
+        ts = datetime.fromisoformat(ts_str)
+        # Normalise to UTC-aware for comparison
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts < start_dt or ts >= end_dt:
+            continue
+
+        temp = p.get("temperature")
+        if p.get("temperatureUnit", "F") == "C" and temp is not None:
+            temp = c_to_f(temp)
+
+        precip_obj = p.get("probabilityOfPrecipitation") or {}
+        precip = precip_obj.get("value") or 0
+
+        wind_str = p.get("windSpeed", "0 mph").split()[0]
+        try:
+            wind = float(wind_str)
+        except ValueError:
+            wind = 0.0
+
+        timestamps.append(ts)
+        temps.append(temp)
+        precips.append(precip)
+        winds.append(wind)
+
+    return timestamps, temps, precips, winds
+
+
+def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"):
+    """
+    Build a two-panel matplotlib chart of the 3-day hourly forecast
+    starting at 1 AM today (local Miami time, UTC-5 / ET).
+
+    Top panel:  Temperature °F line
+    Bottom panel: Precipitation probability % bars + Wind speed mph line
+    """
+    # Miami is Eastern Time (UTC-5 standard, UTC-4 DST).  Use a fixed
+    # UTC-5 offset as a simple approximation; the NWS timestamps carry
+    # their own offset so comparison is still correct.
+    miami_tz = timezone(timedelta(hours=-5))
+    today_1am = datetime.now(miami_tz).replace(
+        hour=1, minute=0, second=0, microsecond=0
+    )
+    # Convert to UTC for consistent comparison with NWS timestamps
+    start_utc = today_1am.astimezone(timezone.utc)
+
+    timestamps, temps, precips, winds = parse_hourly_periods(hourly_periods, start_utc)
+
+    if not timestamps:
+        print("  WARNING: no hourly data found for the requested window; skipping chart.")
+        return
+
+    # Convert to local Miami time for display
+    ts_local = [t.astimezone(miami_tz) for t in timestamps]
+
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(13, 7), sharex=True,
+        gridspec_kw={"height_ratios": [3, 2]},
+    )
+    fig.patch.set_facecolor("#1a1a2e")
+    for ax in (ax1, ax2):
+        ax.set_facecolor("#16213e")
+        ax.tick_params(colors="#e0e0e0", labelsize=8)
+        ax.spines[:].set_color("#444466")
+
+    # ── Top panel: Temperature ────────────────────────────────────────────
+    ax1.plot(ts_local, temps, color="#ff6b6b", linewidth=2, marker="o",
+             markersize=3, label="Temp °F")
+    ax1.fill_between(ts_local, temps, min(t for t in temps if t is not None) - 2,
+                     color="#ff6b6b", alpha=0.15)
+
+    # Annotate high/low
+    valid = [(t, v) for t, v in zip(ts_local, temps) if v is not None]
+    if valid:
+        max_ts, max_t = max(valid, key=lambda x: x[1])
+        min_ts, min_t = min(valid, key=lambda x: x[1])
+        ax1.annotate(f"{max_t:.0f}°F", xy=(max_ts, max_t),
+                     xytext=(0, 8), textcoords="offset points",
+                     color="#ffdd57", fontsize=8, ha="center", fontweight="bold")
+        ax1.annotate(f"{min_t:.0f}°F", xy=(min_ts, min_t),
+                     xytext=(0, -14), textcoords="offset points",
+                     color="#74b9ff", fontsize=8, ha="center", fontweight="bold")
+
+    ax1.set_ylabel("Temperature (°F)", color="#e0e0e0", fontsize=9)
+    ax1.yaxis.label.set_color("#e0e0e0")
+    ax1.tick_params(axis="y", colors="#e0e0e0")
+    ax1.legend(loc="upper right", facecolor="#1a1a2e", edgecolor="#444466",
+               labelcolor="#e0e0e0", fontsize=8)
+    ax1.set_title(
+        f"Miami 3-Day Hourly Forecast  —  from 1 AM {today_1am.strftime('%b %d, %Y')}",
+        color="#e0e0e0", fontsize=12, pad=10,
+    )
+    ax1.grid(axis="y", color="#2a2a4a", linewidth=0.6)
+
+    # ── Bottom panel: Precip probability bars + wind line ─────────────────
+    bar_width = 1 / 24  # ~1 hour in matplotlib date units
+    ax2.bar(ts_local, precips, width=timedelta(hours=0.8),
+            color="#00b4d8", alpha=0.7, label="Precip prob %")
+    ax2.set_ylabel("Precip prob (%)", color="#e0e0e0", fontsize=9)
+    ax2.set_ylim(0, 105)
+    ax2.yaxis.label.set_color("#e0e0e0")
+    ax2.tick_params(axis="y", colors="#e0e0e0")
+
+    ax2b = ax2.twinx()
+    ax2b.set_facecolor("#16213e")
+    ax2b.plot(ts_local, winds, color="#a8e6cf", linewidth=1.5,
+              linestyle="--", marker="s", markersize=2, label="Wind mph")
+    ax2b.set_ylabel("Wind (mph)", color="#a8e6cf", fontsize=9)
+    ax2b.yaxis.label.set_color("#a8e6cf")
+    ax2b.tick_params(axis="y", colors="#a8e6cf")
+    ax2b.spines[:].set_color("#444466")
+
+    # Combined legend for bottom panel
+    lines1, labels1 = ax2.get_legend_handles_labels()
+    lines2, labels2 = ax2b.get_legend_handles_labels()
+    ax2.legend(lines1 + lines2, labels1 + labels2,
+               loc="upper right", facecolor="#1a1a2e",
+               edgecolor="#444466", labelcolor="#e0e0e0", fontsize=8)
+    ax2.grid(axis="y", color="#2a2a4a", linewidth=0.6)
+
+    # ── Shared x-axis: day separators + formatting ─────────────────────────
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%a\n%-I %p", tz=miami_tz))
+    ax2.xaxis.set_major_locator(mdates.HourLocator(byhour=[0, 6, 12, 18], tz=miami_tz))
+    ax2.tick_params(axis="x", colors="#e0e0e0", labelsize=7.5)
+
+    # Vertical day-boundary lines
+    day_start = today_1am.replace(hour=0)
+    for d in range(1, 4):
+        boundary = day_start + timedelta(days=d)
+        for ax in (ax1, ax2):
+            ax.axvline(boundary, color="#555577", linewidth=0.8, linestyle=":")
+
+    fig.autofmt_xdate(rotation=0, ha="center")
+    plt.tight_layout(h_pad=0.4)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print(f"  Chart saved → {output_path}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -323,6 +490,16 @@ def main():
         sys.exit(1)
 
     display_forecast(periods)
+
+    # --- hourly chart -----------------------------------------------------
+    print(f"\n  [4/4] Fetching hourly forecast for chart …")
+    try:
+        hourly = get_hourly_forecast(grid_id, grid_x, grid_y)
+        print(f"        {len(hourly)} hourly periods available")
+        chart_forecast_hourly(hourly)
+    except Exception as exc:
+        print(f"  WARNING: chart not generated — {exc}")
+
     print("  Source: NOAA National Weather Service — api.weather.gov\n")
 
 
