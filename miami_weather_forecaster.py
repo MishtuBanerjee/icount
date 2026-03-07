@@ -19,7 +19,26 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import seaborn as sns
 
-sns.set_theme(style="whitegrid")
+sns.set_theme(
+    style="ticks",
+    rc={
+        "axes.facecolor":  "white",
+        "figure.facecolor": "white",
+        "axes.edgecolor":  "#333333",
+        "axes.linewidth":  0.8,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "xtick.major.size": 5,
+        "ytick.major.size": 5,
+        "xtick.minor.size": 3,
+        "ytick.minor.size": 3,
+        "xtick.major.width": 0.8,
+        "ytick.major.width": 0.8,
+        "axes.grid":       True,
+        "grid.color":      "#e5e5e5",
+        "grid.linewidth":  0.6,
+    },
+)
 from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
@@ -459,9 +478,14 @@ def chart_forecast_errors(
             for ax in (ax1, ax2):
                 ax.axvline(boundary, color="#bdc3c7", linewidth=0.8, linestyle=":")
 
+    for ax in (ax1, ax2):
+        ax.minorticks_on()
+        ax.tick_params(which="minor", length=3, width=0.6)
+        sns.despine(ax=ax, top=True, right=True)
+
     fig.autofmt_xdate(rotation=0, ha="center")
     plt.tight_layout(h_pad=0.4)
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"  Chart saved → {output_path}")
     print(f"  Tree model  MAE={mae:.2f}°F  RMSE={rmse:.2f}°F  Bias={bias:+.2f}°F")
@@ -603,9 +627,15 @@ def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"
         for ax in (ax1, ax2):
             ax.axvline(boundary, color="#bdc3c7", linewidth=0.8, linestyle=":")
 
+    for ax in (ax1, ax2):
+        ax.minorticks_on()
+        ax.tick_params(which="minor", length=3, width=0.6)
+        sns.despine(ax=ax, top=True, right=True)
+    sns.despine(ax=ax2b, top=True, right=False)  # keep right spine for twin axis
+
     fig.autofmt_xdate(rotation=0, ha="center")
     plt.tight_layout(h_pad=0.4)
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"  Chart saved → {output_path}")
 
