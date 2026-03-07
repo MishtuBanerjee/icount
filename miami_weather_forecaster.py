@@ -12,7 +12,7 @@ Data source: https://api.weather.gov  (no API key required)
 import sys
 import requests
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor
+from catboost import CatBoostRegressor
 import matplotlib
 matplotlib.use("Agg")           # headless – saves to file instead of displaying
 import matplotlib.pyplot as plt
@@ -237,7 +237,7 @@ def _records_to_xy(records):
 def build_tree_model(hourly_records):
     """
     Split the 14-day hourly observations into train (first TRAIN_DAYS days)
-    and test (last 3 days).  Fit a RandomForestRegressor on the training
+    and test (last 3 days).  Fit a CatBoostRegressor on the training
     portion and predict on the test portion.
 
     Returns (timestamps, actuals, predictions) — parallel lists for the
@@ -261,7 +261,14 @@ def build_tree_model(hourly_records):
     X_test,  y_test  = _records_to_xy(test)
     ts_test = [r["timestamp"] for r in test]
 
-    model = RandomForestRegressor(n_estimators=150, random_state=42, n_jobs=-1)
+    model = CatBoostRegressor(
+        iterations=500,
+        learning_rate=0.05,
+        depth=6,
+        loss_function="RMSE",
+        random_seed=42,
+        verbose=0,
+    )
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
 
@@ -414,7 +421,7 @@ def chart_forecast_errors(
     ax1.plot(ts_local, actuals,     color="#ff6b6b", linewidth=2,
              label="Actual °F")
     ax1.plot(ts_local, predictions, color="#ffd700", linewidth=2,
-             linestyle="--", label="RandomForest predicted °F")
+             linestyle="--", label="CatBoost predicted °F")
     ax1.fill_between(ts_local, actuals, predictions,
                      color="#888800", alpha=0.12, label="Error band")
     ax1.set_ylabel("Temperature (°F)", color="#e0e0e0", fontsize=9)
@@ -423,7 +430,7 @@ def chart_forecast_errors(
     ax1.legend(loc="upper right", facecolor="#1a1a2e",
                edgecolor="#444466", labelcolor="#e0e0e0", fontsize=8)
     ax1.set_title(
-        "Miami 3-Day Forecast Error  —  RandomForest Tree Model vs Actual Observations",
+        "Miami 3-Day Forecast Error  —  CatBoost Tree Model vs Actual Observations",
         color="#e0e0e0", fontsize=11, pad=10,
     )
     ax1.grid(axis="y", color="#2a2a4a", linewidth=0.6)
@@ -664,7 +671,7 @@ def main():
     display_two_week_summary(summaries)
 
     # --- tree model: train on first 11 days, evaluate on last 3 ----------
-    print(f"\n  [2b/3] Building RandomForest tree model & evaluating 3-day forecast error …")
+    print(f"\n  [2b/3] Building CatBoost tree model & evaluating 3-day forecast error …")
     try:
         hourly_records = parse_hourly_observations(features)
         ts_test, actuals, predictions = build_tree_model(hourly_records)
