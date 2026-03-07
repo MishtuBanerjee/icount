@@ -10,6 +10,7 @@ Data source: https://api.weather.gov  (no API key required)
 """
 
 import sys
+import math
 import requests
 import numpy as np
 from catboost import CatBoostRegressor
@@ -205,11 +206,20 @@ def temperature_trend(summaries):
     return num / den if den else 0.0
 
 # ---------------------------------------------------------------------------
-# Tree model: hourly observations → RandomForest temperature forecast
+# Feature engineering & preprocessing
 # ---------------------------------------------------------------------------
 
-FEATURE_KEYS = ["hour", "day_of_year", "humidity", "wind_mph", "dewpoint_f"]
-TRAIN_DAYS   = 11   # hold out last 3 days of the 14-day window as test set
+# sin_hour / cos_hour replace raw hour to give the model a cyclical signal.
+# Lag features capture the strong autocorrelation of temperature.
+# rolling3 gives short-term momentum.
+FEATURE_KEYS = [
+    "sin_hour", "cos_hour", "day_of_year",
+    "humidity", "wind_mph", "dewpoint_f",
+    "lag1_temp_f", "lag2_temp_f", "lag3_temp_f",
+    "rolling3_temp_f",
+]
+
+TRAIN_DAYS = 11   # hold out last 3 days of the 14-day window as test set
 
 
 def parse_hourly_observations(features):
@@ -235,25 +245,17 @@ def parse_hourly_observations(features):
             continue
 
         records.append({
-            "timestamp":  ts,
-            "hour":       ts.hour,
+            "timestamp":   ts,
+            "hour":        ts.hour,
             "day_of_year": ts.timetuple().tm_yday,
-            "temp_f":     c_to_f(temp_c),
-            "dewpoint_f": c_to_f(dew_c)        if dew_c    is not None else np.nan,
-            "humidity":   humidity              if humidity is not None else np.nan,
-            "wind_mph":   ms_to_mph(wind_ms)    if wind_ms  is not None else np.nan,
+            "temp_f":      c_to_f(temp_c),
+            "dewpoint_f":  c_to_f(dew_c)      if dew_c    is not None else np.nan,
+            "humidity":    humidity             if humidity is not None else np.nan,
+            "wind_mph":    ms_to_mph(wind_ms)  if wind_ms  is not None else np.nan,
         })
 
     records.sort(key=lambda r: r["timestamp"])
     return records
-
-
-def _records_to_xy(records):
-    X = np.array([[r[k] if not (isinstance(r[k], float) and np.isnan(r[k])) else 0.0
-                   for k in FEATURE_KEYS]
-                  for r in records], dtype=float)
-    y = np.array([r["temp_f"] for r in records], dtype=float)
-    return X, y
 
 
 def trim_outliers(records, n_std=2):
@@ -273,20 +275,101 @@ def trim_outliers(records, n_std=2):
     return kept, len(records) - len(kept)
 
 
+def clip_feature_outliers(records, n_std=2):
+    """
+    Winsorize humidity and wind_mph values that exceed *n_std* standard
+    deviations from their respective means.  NaN values are left as-is.
+    Modifies records in-place and returns them.
+    """
+    for key in ("humidity", "wind_mph"):
+        vals = [r[key] for r in records
+                if not (isinstance(r[key], float) and np.isnan(r[key]))]
+        if len(vals) < 4:
+            continue
+        mean = sum(vals) / len(vals)
+        std  = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+        lo, hi = mean - n_std * std, mean + n_std * std
+        for r in records:
+            v = r[key]
+            if not (isinstance(v, float) and np.isnan(v)):
+                r[key] = max(lo, min(hi, v))
+    return records
+
+
+def add_engineered_features(records):
+    """
+    Add in-place:
+      sin_hour / cos_hour   – cyclical encoding of hour-of-day
+      lag1/2/3_temp_f       – temperature of the N-th preceding observation
+      rolling3_temp_f       – 3-observation rolling mean temperature
+    Records must already be sorted chronologically.
+    """
+    for i, r in enumerate(records):
+        angle = 2 * math.pi * r["hour"] / 24
+        r["sin_hour"] = math.sin(angle)
+        r["cos_hour"] = math.cos(angle)
+        r["lag1_temp_f"]     = records[i - 1]["temp_f"] if i >= 1 else np.nan
+        r["lag2_temp_f"]     = records[i - 2]["temp_f"] if i >= 2 else np.nan
+        r["lag3_temp_f"]     = records[i - 3]["temp_f"] if i >= 3 else np.nan
+        r["rolling3_temp_f"] = (
+            (records[i]["temp_f"] + records[i-1]["temp_f"] + records[i-2]["temp_f"]) / 3
+            if i >= 2 else np.nan
+        )
+    return records
+
+
+def _compute_medians(records):
+    """Compute per-feature medians from records for NaN imputation."""
+    medians = {}
+    for k in FEATURE_KEYS:
+        vals = sorted(
+            r[k] for r in records
+            if k in r and not (isinstance(r.get(k), float) and np.isnan(r[k]))
+        )
+        n = len(vals)
+        medians[k] = (
+            vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+        ) if n else 0.0
+    return medians
+
+
+def _records_to_xy(records, medians):
+    """Convert records to numpy X, y using median imputation for missing values."""
+    def safe(r, k):
+        v = r.get(k, np.nan)
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return medians.get(k, 0.0)
+        return v
+
+    X = np.array([[safe(r, k) for k in FEATURE_KEYS] for r in records], dtype=float)
+    y = np.array([r["temp_f"] for r in records], dtype=float)
+    return X, y
+
+# ---------------------------------------------------------------------------
+# Tree model: hourly observations → CatBoost temperature forecast
+# ---------------------------------------------------------------------------
+
 def build_tree_model(hourly_records):
     """
     Split the 14-day hourly observations into train (first TRAIN_DAYS days)
     and test (last 3 days).  Fit a CatBoostRegressor on the training
-    portion and predict on the test portion.
+    portion and evaluate on the test portion.  Also evaluates a persistence
+    baseline (predict next hour = last observed temperature).
 
-    Returns (timestamps, actuals, predictions) — parallel lists for the
-    test window — or empty lists if data is insufficient.
+    Returns:
+        ts_test       – test-window timestamps
+        actuals       – observed temperatures for test window
+        predictions   – CatBoost predictions
+        persistence   – persistence baseline predictions
+        model         – fitted CatBoostRegressor
+        seed_records  – last 5 train records (for forward forecasting)
+        medians       – per-feature medians from training set
+    Returns 7-tuple of empty values if data is insufficient.
     """
     all_dates = sorted({r["timestamp"].strftime("%Y-%m-%d") for r in hourly_records})
     if len(all_dates) < 4:
-        return [], [], []
+        return [], [], [], [], None, [], {}
 
-    # Last 3 calendar days are the test set
     test_start_str = all_dates[-3]
     test_start = datetime.strptime(test_start_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
@@ -294,10 +377,11 @@ def build_tree_model(hourly_records):
     test  = [r for r in hourly_records if r["timestamp"] >= test_start]
 
     if len(train) < 10 or len(test) < 1:
-        return [], [], []
+        return [], [], [], [], None, [], {}
 
-    X_train, y_train = _records_to_xy(train)
-    X_test,  y_test  = _records_to_xy(test)
+    medians = _compute_medians(train)
+    X_train, y_train = _records_to_xy(train, medians)
+    X_test,  y_test  = _records_to_xy(test,  medians)
     ts_test = [r["timestamp"] for r in test]
 
     model = CatBoostRegressor(
@@ -311,8 +395,117 @@ def build_tree_model(hourly_records):
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
 
-    return ts_test, y_test.tolist(), y_pred.tolist()
+    # Persistence baseline: each prediction = previous observation's temperature
+    y_persist = np.empty_like(y_test)
+    y_persist[0]  = train[-1]["temp_f"]   # seed from last training point
+    y_persist[1:] = y_test[:-1]           # shift actuals by one step
 
+    # Feature importance
+    importance = sorted(
+        zip(FEATURE_KEYS, model.get_feature_importance()),
+        key=lambda x: x[1], reverse=True,
+    )
+    print("        Feature importance:")
+    for fname, score in importance:
+        print(f"          {fname:<20} {score:.1f}")
+
+    return (
+        ts_test,
+        y_test.tolist(),
+        y_pred.tolist(),
+        y_persist.tolist(),
+        model,
+        train[-5:],
+        medians,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Forward model forecast (iterative / recursive, 3-day horizon)
+# ---------------------------------------------------------------------------
+
+def generate_model_forecast(model, medians, seed_records, hourly_periods, start_utc):
+    """
+    Iteratively predict hourly temperatures for the 3-day NWS window.
+    Uses NWS humidity / wind / dewpoint as contextual features and feeds
+    each model prediction back as a lag feature for subsequent steps.
+
+    Returns (timestamps, predicted_temps_f) — UTC-aware datetimes.
+    """
+    end_utc = start_utc + timedelta(days=3)
+
+    # Index NWS hourly periods by truncated hour
+    nws_by_hour = {}
+    for p in hourly_periods:
+        ts_str = p.get("startTime", "")
+        if not ts_str:
+            continue
+        ts = datetime.fromisoformat(ts_str)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts < start_utc or ts >= end_utc:
+            continue
+        ts_hr = ts.replace(minute=0, second=0, microsecond=0)
+
+        humidity   = (p.get("relativeHumidity") or {}).get("value")
+        dewpoint_c = (p.get("dewpoint")         or {}).get("value")
+        wind_str   = p.get("windSpeed", "0 mph").split()[0]
+        try:
+            wind = float(wind_str)
+        except ValueError:
+            wind = 0.0
+
+        nws_by_hour[ts_hr] = {
+            "humidity":   humidity              if humidity   is not None else np.nan,
+            "wind_mph":   wind,
+            "dewpoint_f": c_to_f(dewpoint_c)   if dewpoint_c is not None else np.nan,
+        }
+
+    if not nws_by_hour:
+        return [], []
+
+    # Seed the prediction history with the last observed temperatures
+    pred_history = [r["temp_f"] for r in seed_records]
+
+    timestamps_out, preds_out = [], []
+    for ts in sorted(nws_by_hour.keys()):
+        nws = nws_by_hour[ts]
+        n   = len(pred_history)
+
+        lag1     = pred_history[-1] if n >= 1 else np.nan
+        lag2     = pred_history[-2] if n >= 2 else np.nan
+        lag3     = pred_history[-3] if n >= 3 else np.nan
+        rolling3 = (
+            (pred_history[-1] + pred_history[-2] + pred_history[-3]) / 3
+            if n >= 3 else np.nan
+        )
+
+        angle    = 2 * math.pi * ts.hour / 24
+        feat_dict = {
+            "sin_hour":       math.sin(angle),
+            "cos_hour":       math.cos(angle),
+            "day_of_year":    ts.timetuple().tm_yday,
+            "humidity":       nws["humidity"],
+            "wind_mph":       nws["wind_mph"],
+            "dewpoint_f":     nws["dewpoint_f"],
+            "lag1_temp_f":    lag1,
+            "lag2_temp_f":    lag2,
+            "lag3_temp_f":    lag3,
+            "rolling3_temp_f": rolling3,
+        }
+
+        feat = np.array([
+            feat_dict[k] if not (isinstance(feat_dict[k], float) and np.isnan(feat_dict[k]))
+            else medians.get(k, 0.0)
+            for k in FEATURE_KEYS
+        ], dtype=float).reshape(1, -1)
+
+        pred_temp = float(model.predict(feat)[0])
+        pred_history.append(pred_temp)
+        timestamps_out.append(ts)
+        preds_out.append(pred_temp)
+
+    return timestamps_out, preds_out
 
 # ---------------------------------------------------------------------------
 # Display helpers
@@ -426,13 +619,13 @@ def display_forecast(periods):
 # ---------------------------------------------------------------------------
 
 def chart_forecast_errors(
-    timestamps, actuals, predictions,
+    timestamps, actuals, predictions, persistence=None,
     output_path="miami_forecast_error_chart.png",
 ):
     """
     Two-panel chart:
-      Top    – actual °F vs tree-model predicted °F over the 3-day test window
-      Bottom – hourly error bars (predicted − actual) with MAE / RMSE annotation
+      Top    – actual °F vs CatBoost predicted °F + persistence baseline
+      Bottom – hourly error bars (predicted − actual) with metrics annotation
     """
     if not timestamps:
         print("  WARNING: no error data to plot; skipping error chart.")
@@ -458,6 +651,14 @@ def chart_forecast_errors(
                  linewidth=2, linestyle="--", label="CatBoost predicted °F")
     ax1.fill_between(ts_local, actuals, predictions,
                      color="#2980b9", alpha=0.10, label="Error band")
+
+    p_mae = p_rmse = None
+    if persistence:
+        p_mae  = sum(abs(p - a) for p, a in zip(persistence, actuals)) / len(actuals)
+        p_rmse = (sum((p - a) ** 2 for p, a in zip(persistence, actuals)) / len(actuals)) ** 0.5
+        sns.lineplot(x=ts_local, y=persistence, ax=ax1, color="#95a5a6",
+                     linewidth=1.2, linestyle=":", label=f"Persistence (MAE={p_mae:.2f}°F)")
+
     ax1.set_ylabel("Temperature (°F)", fontsize=9)
     ax1.tick_params(labelsize=8)
     ax1.legend(loc="upper right", fontsize=8)
@@ -475,9 +676,10 @@ def chart_forecast_errors(
     ax2.tick_params(labelsize=8)
     ax2.legend(loc="upper right", fontsize=8)
 
-    # Metrics as x-axis label
+    persist_note = f"    Persistence MAE={p_mae:.2f}°F  RMSE={p_rmse:.2f}°F" if p_mae is not None else ""
     ax2.set_xlabel(
-        f"MAE = {mae:.2f}°F    RMSE = {rmse:.2f}°F    Bias = {bias:+.2f}°F"
+        f"CatBoost  MAE={mae:.2f}°F  RMSE={rmse:.2f}°F  Bias={bias:+.2f}°F"
+        f"{persist_note}"
         f"    (red = over-predicted, blue = under-predicted)",
         fontsize=8.5,
     )
@@ -505,7 +707,9 @@ def chart_forecast_errors(
     plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"  Chart saved → {output_path}")
-    print(f"  Tree model  MAE={mae:.2f}°F  RMSE={rmse:.2f}°F  Bias={bias:+.2f}°F")
+    print(f"  CatBoost    MAE={mae:.2f}°F  RMSE={rmse:.2f}°F  Bias={bias:+.2f}°F")
+    if p_mae is not None:
+        print(f"  Persistence MAE={p_mae:.2f}°F  RMSE={p_rmse:.2f}°F")
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +730,6 @@ def parse_hourly_periods(periods, start_dt):
         if not ts_str:
             continue
         ts = datetime.fromisoformat(ts_str)
-        # Normalise to UTC-aware for comparison
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         if ts < start_dt or ts >= end_dt:
@@ -553,22 +756,18 @@ def parse_hourly_periods(periods, start_dt):
     return timestamps, temps, precips, winds
 
 
-def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"):
+def chart_forecast_hourly(hourly_periods, model_forecast=None,
+                          output_path="miami_forecast_chart.png"):
     """
-    Build a two-panel seaborn/matplotlib chart of the 3-day hourly forecast
-    starting at 1 AM today (local Miami time, UTC-5 / ET).
+    Build a two-panel seaborn/matplotlib chart of the 3-day hourly forecast.
 
-    Top panel:  Temperature °F line
+    Top panel:    NWS Temperature °F line + optional CatBoost model forecast
     Bottom panel: Precipitation probability % bars + Wind speed mph line
     """
-    # Miami is Eastern Time (UTC-5 standard, UTC-4 DST).  Use a fixed
-    # UTC-5 offset as a simple approximation; the NWS timestamps carry
-    # their own offset so comparison is still correct.
     miami_tz = timezone(timedelta(hours=-5))
     today_1am = datetime.now(miami_tz).replace(
         hour=1, minute=0, second=0, microsecond=0
     )
-    # Convert to UTC for consistent comparison with NWS timestamps
     start_utc = today_1am.astimezone(timezone.utc)
 
     timestamps, temps, precips, winds = parse_hourly_periods(hourly_periods, start_utc)
@@ -577,7 +776,6 @@ def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"
         print("  WARNING: no hourly data found for the requested window; skipping chart.")
         return
 
-    # Convert to local Miami time for display
     ts_local = [t.astimezone(miami_tz) for t in timestamps]
 
     fig, (ax1, ax2) = plt.subplots(
@@ -585,14 +783,23 @@ def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"
         gridspec_kw={"height_ratios": [3, 2]},
     )
 
-    # ── Top panel: Temperature ────────────────────────────────────────────
+    # ── Top panel: NWS temperature ────────────────────────────────────────
     sns.lineplot(x=ts_local, y=temps, ax=ax1, color="#e74c3c",
                  linewidth=2, markers=True, marker="o", markersize=3,
-                 label="Temp °F")
+                 label="NWS Forecast °F")
     ax1.fill_between(ts_local, temps, min(t for t in temps if t is not None) - 2,
                      color="#e74c3c", alpha=0.12)
 
-    # Annotate high/low
+    # ── CatBoost model overlay ────────────────────────────────────────────
+    if model_forecast:
+        mts, mtemps = model_forecast
+        mts_local = [t.astimezone(miami_tz) for t in mts]
+        if mts_local:
+            sns.lineplot(x=mts_local, y=mtemps, ax=ax1, color="#8e44ad",
+                         linewidth=1.8, linestyle="--", marker="s", markersize=2,
+                         label="CatBoost model °F")
+
+    # Annotate NWS high/low
     valid = [(t, v) for t, v in zip(ts_local, temps) if v is not None]
     if valid:
         max_ts, max_t = max(valid, key=lambda x: x[1])
@@ -626,7 +833,6 @@ def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"
     ax2b.set_ylabel("Wind (mph)", color="#27ae60", fontsize=9)
     ax2b.tick_params(axis="y", labelsize=8, colors="#27ae60")
 
-    # Combined legend for bottom panel
     lines1, labels1 = ax2.get_legend_handles_labels()
     lines2, labels2 = ax2b.get_legend_handles_labels()
     ax2.legend(lines1 + lines2, labels1 + labels2,
@@ -637,7 +843,6 @@ def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"
     ax2.xaxis.set_major_locator(mdates.HourLocator(byhour=[0, 6, 12, 18], tz=miami_tz))
     ax2.tick_params(axis="x", labelsize=7.5)
 
-    # Vertical day-boundary lines
     day_start = today_1am.replace(hour=0)
     for d in range(1, 4):
         boundary = day_start + timedelta(days=d)
@@ -648,7 +853,7 @@ def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"
         ax.minorticks_on()
         ax.tick_params(which="minor", length=3, width=0.6)
         sns.despine(ax=ax, top=True, right=True)
-    sns.despine(ax=ax2b, top=True, right=False)  # keep right spine for twin axis
+    sns.despine(ax=ax2b, top=True, right=False)
 
     fig.autofmt_xdate(rotation=0, ha="center")
     plt.tight_layout(h_pad=0.4)
@@ -695,14 +900,19 @@ def main():
 
     # --- tree model: train on first 11 days, evaluate on last 3 ----------
     print(f"\n  [2b/3] Building CatBoost tree model & evaluating 3-day forecast error …")
+    model = None
+    seed_records, medians = [], {}
     try:
         hourly_records = parse_hourly_observations(features)
         hourly_records, n_dropped = trim_outliers(hourly_records)
-        ts_test, actuals, predictions = build_tree_model(hourly_records)
+        hourly_records = clip_feature_outliers(hourly_records)
+        hourly_records = add_engineered_features(hourly_records)
+        ts_test, actuals, predictions, persistence, model, seed_records, medians = \
+            build_tree_model(hourly_records)
         if ts_test:
             print(f"        {len(hourly_records)} hourly obs  ({n_dropped} outliers trimmed)  →  "
                   f"test window {len(ts_test)} hours")
-            chart_forecast_errors(ts_test, actuals, predictions)
+            chart_forecast_errors(ts_test, actuals, predictions, persistence)
         else:
             print("        Insufficient data for tree model evaluation.")
     except Exception as exc:
@@ -719,12 +929,27 @@ def main():
 
     display_forecast(periods)
 
-    # --- hourly chart -----------------------------------------------------
+    # --- hourly chart (with optional CatBoost model overlay) --------------
     print(f"\n  [4/4] Fetching hourly forecast for chart …")
     try:
         hourly = get_hourly_forecast(grid_id, grid_x, grid_y)
         print(f"        {len(hourly)} hourly periods available")
-        chart_forecast_hourly(hourly)
+
+        model_forecast = None
+        if model is not None and seed_records:
+            miami_tz  = timezone(timedelta(hours=-5))
+            today_1am = datetime.now(miami_tz).replace(
+                hour=1, minute=0, second=0, microsecond=0
+            )
+            start_utc = today_1am.astimezone(timezone.utc)
+            mts, mtemps = generate_model_forecast(
+                model, medians, seed_records, hourly, start_utc
+            )
+            if mts:
+                model_forecast = (mts, mtemps)
+                print(f"        Model forward forecast: {len(mts)} hourly predictions")
+
+        chart_forecast_hourly(hourly, model_forecast=model_forecast)
     except Exception as exc:
         print(f"  WARNING: chart not generated — {exc}")
 
