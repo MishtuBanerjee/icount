@@ -256,6 +256,23 @@ def _records_to_xy(records):
     return X, y
 
 
+def trim_outliers(records, n_std=2):
+    """
+    Remove hourly records whose temp_f is more than *n_std* standard
+    deviations from the mean.  Returns the filtered list and a count of
+    how many were dropped.
+    """
+    temps = [r["temp_f"] for r in records]
+    if len(temps) < 4:
+        return records, 0
+    mean = sum(temps) / len(temps)
+    variance = sum((t - mean) ** 2 for t in temps) / len(temps)
+    std = variance ** 0.5
+    threshold = n_std * std
+    kept = [r for r in records if abs(r["temp_f"] - mean) <= threshold]
+    return kept, len(records) - len(kept)
+
+
 def build_tree_model(hourly_records):
     """
     Split the 14-day hourly observations into train (first TRAIN_DAYS days)
@@ -680,9 +697,10 @@ def main():
     print(f"\n  [2b/3] Building CatBoost tree model & evaluating 3-day forecast error …")
     try:
         hourly_records = parse_hourly_observations(features)
+        hourly_records, n_dropped = trim_outliers(hourly_records)
         ts_test, actuals, predictions = build_tree_model(hourly_records)
         if ts_test:
-            print(f"        {len(hourly_records)} hourly obs  →  "
+            print(f"        {len(hourly_records)} hourly obs  ({n_dropped} outliers trimmed)  →  "
                   f"test window {len(ts_test)} hours")
             chart_forecast_errors(ts_test, actuals, predictions)
         else:
