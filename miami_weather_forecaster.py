@@ -17,6 +17,9 @@ import matplotlib
 matplotlib.use("Agg")           # headless – saves to file instead of displaying
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import seaborn as sns
+
+sns.set_theme(style="whitegrid")
 from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
@@ -411,54 +414,42 @@ def chart_forecast_errors(
         2, 1, figsize=(13, 8), sharex=True,
         gridspec_kw={"height_ratios": [2, 1]},
     )
-    fig.patch.set_facecolor("#1a1a2e")
-    for ax in (ax1, ax2):
-        ax.set_facecolor("#16213e")
-        ax.tick_params(colors="#e0e0e0", labelsize=8)
-        ax.spines[:].set_color("#444466")
 
     # ── Top: actual vs predicted ──────────────────────────────────────────
-    ax1.plot(ts_local, actuals,     color="#ff6b6b", linewidth=2,
-             label="Actual °F")
-    ax1.plot(ts_local, predictions, color="#ffd700", linewidth=2,
-             linestyle="--", label="CatBoost predicted °F")
+    sns.lineplot(x=ts_local, y=actuals,     ax=ax1, color="#e74c3c",
+                 linewidth=2, label="Actual °F")
+    sns.lineplot(x=ts_local, y=predictions, ax=ax1, color="#2980b9",
+                 linewidth=2, linestyle="--", label="CatBoost predicted °F")
     ax1.fill_between(ts_local, actuals, predictions,
-                     color="#888800", alpha=0.12, label="Error band")
-    ax1.set_ylabel("Temperature (°F)", color="#e0e0e0", fontsize=9)
-    ax1.yaxis.label.set_color("#e0e0e0")
-    ax1.tick_params(axis="y", colors="#e0e0e0")
-    ax1.legend(loc="upper right", facecolor="#1a1a2e",
-               edgecolor="#444466", labelcolor="#e0e0e0", fontsize=8)
+                     color="#2980b9", alpha=0.10, label="Error band")
+    ax1.set_ylabel("Temperature (°F)", fontsize=9)
+    ax1.tick_params(labelsize=8)
+    ax1.legend(loc="upper right", fontsize=8)
     ax1.set_title(
         "Miami 3-Day Forecast Error  —  CatBoost Tree Model vs Actual Observations",
-        color="#e0e0e0", fontsize=11, pad=10,
+        fontsize=11, pad=10,
     )
-    ax1.grid(axis="y", color="#2a2a4a", linewidth=0.6)
 
     # ── Bottom: error bars ────────────────────────────────────────────────
-    bar_colors = ["#ff4444" if e > 0 else "#44aaff" for e in errors]
+    bar_colors = ["#e74c3c" if e > 0 else "#3498db" for e in errors]
     ax2.bar(ts_local, errors, width=timedelta(hours=0.8),
             color=bar_colors, alpha=0.85, label="Error (pred − actual)")
-    ax2.axhline(0, color="#aaaacc", linewidth=0.9, linestyle="-")
-    ax2.set_ylabel("Error (°F)", color="#e0e0e0", fontsize=9)
-    ax2.yaxis.label.set_color("#e0e0e0")
-    ax2.tick_params(axis="y", colors="#e0e0e0")
-    ax2.legend(loc="upper right", facecolor="#1a1a2e",
-               edgecolor="#444466", labelcolor="#e0e0e0", fontsize=8)
-    ax2.grid(axis="y", color="#2a2a4a", linewidth=0.6)
+    ax2.axhline(0, color="#7f8c8d", linewidth=0.9, linestyle="-")
+    ax2.set_ylabel("Error (°F)", fontsize=9)
+    ax2.tick_params(labelsize=8)
+    ax2.legend(loc="upper right", fontsize=8)
 
     # Metrics as x-axis label
     ax2.set_xlabel(
         f"MAE = {mae:.2f}°F    RMSE = {rmse:.2f}°F    Bias = {bias:+.2f}°F"
         f"    (red = over-predicted, blue = under-predicted)",
-        color="#aaaacc", fontsize=8.5,
+        fontsize=8.5,
     )
-    ax2.xaxis.label.set_color("#aaaacc")
 
     # ── Shared x-axis ─────────────────────────────────────────────────────
     ax2.xaxis.set_major_formatter(mdates.DateFormatter("%a\n%-I %p", tz=miami_tz))
     ax2.xaxis.set_major_locator(mdates.HourLocator(byhour=[0, 6, 12, 18], tz=miami_tz))
-    ax2.tick_params(axis="x", colors="#e0e0e0", labelsize=7.5)
+    ax2.tick_params(axis="x", labelsize=7.5)
 
     # Day-boundary verticals
     if ts_local:
@@ -466,12 +457,11 @@ def chart_forecast_errors(
         for d in range(1, 4):
             boundary = day0 + timedelta(days=d)
             for ax in (ax1, ax2):
-                ax.axvline(boundary, color="#555577", linewidth=0.8, linestyle=":")
+                ax.axvline(boundary, color="#bdc3c7", linewidth=0.8, linestyle=":")
 
     fig.autofmt_xdate(rotation=0, ha="center")
     plt.tight_layout(h_pad=0.4)
-    plt.savefig(output_path, dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Chart saved → {output_path}")
     print(f"  Tree model  MAE={mae:.2f}°F  RMSE={rmse:.2f}°F  Bias={bias:+.2f}°F")
@@ -524,7 +514,7 @@ def parse_hourly_periods(periods, start_dt):
 
 def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"):
     """
-    Build a two-panel matplotlib chart of the 3-day hourly forecast
+    Build a two-panel seaborn/matplotlib chart of the 3-day hourly forecast
     starting at 1 AM today (local Miami time, UTC-5 / ET).
 
     Top panel:  Temperature °F line
@@ -553,17 +543,13 @@ def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"
         2, 1, figsize=(13, 7), sharex=True,
         gridspec_kw={"height_ratios": [3, 2]},
     )
-    fig.patch.set_facecolor("#1a1a2e")
-    for ax in (ax1, ax2):
-        ax.set_facecolor("#16213e")
-        ax.tick_params(colors="#e0e0e0", labelsize=8)
-        ax.spines[:].set_color("#444466")
 
     # ── Top panel: Temperature ────────────────────────────────────────────
-    ax1.plot(ts_local, temps, color="#ff6b6b", linewidth=2, marker="o",
-             markersize=3, label="Temp °F")
+    sns.lineplot(x=ts_local, y=temps, ax=ax1, color="#e74c3c",
+                 linewidth=2, markers=True, marker="o", markersize=3,
+                 label="Temp °F")
     ax1.fill_between(ts_local, temps, min(t for t in temps if t is not None) - 2,
-                     color="#ff6b6b", alpha=0.15)
+                     color="#e74c3c", alpha=0.12)
 
     # Annotate high/low
     valid = [(t, v) for t, v in zip(ts_local, temps) if v is not None]
@@ -572,64 +558,54 @@ def chart_forecast_hourly(hourly_periods, output_path="miami_forecast_chart.png"
         min_ts, min_t = min(valid, key=lambda x: x[1])
         ax1.annotate(f"{max_t:.0f}°F", xy=(max_ts, max_t),
                      xytext=(0, 8), textcoords="offset points",
-                     color="#ffdd57", fontsize=8, ha="center", fontweight="bold")
+                     color="#c0392b", fontsize=8, ha="center", fontweight="bold")
         ax1.annotate(f"{min_t:.0f}°F", xy=(min_ts, min_t),
                      xytext=(0, -14), textcoords="offset points",
-                     color="#74b9ff", fontsize=8, ha="center", fontweight="bold")
+                     color="#2980b9", fontsize=8, ha="center", fontweight="bold")
 
-    ax1.set_ylabel("Temperature (°F)", color="#e0e0e0", fontsize=9)
-    ax1.yaxis.label.set_color("#e0e0e0")
-    ax1.tick_params(axis="y", colors="#e0e0e0")
-    ax1.legend(loc="upper right", facecolor="#1a1a2e", edgecolor="#444466",
-               labelcolor="#e0e0e0", fontsize=8)
+    ax1.set_ylabel("Temperature (°F)", fontsize=9)
+    ax1.tick_params(labelsize=8)
+    ax1.legend(loc="upper right", fontsize=8)
     ax1.set_title(
         f"Miami 3-Day Hourly Forecast  —  from 1 AM {today_1am.strftime('%b %d, %Y')}",
-        color="#e0e0e0", fontsize=12, pad=10,
+        fontsize=12, pad=10,
     )
-    ax1.grid(axis="y", color="#2a2a4a", linewidth=0.6)
 
     # ── Bottom panel: Precip probability bars + wind line ─────────────────
-    bar_width = 1 / 24  # ~1 hour in matplotlib date units
     ax2.bar(ts_local, precips, width=timedelta(hours=0.8),
-            color="#00b4d8", alpha=0.7, label="Precip prob %")
-    ax2.set_ylabel("Precip prob (%)", color="#e0e0e0", fontsize=9)
+            color="#2980b9", alpha=0.65, label="Precip prob %")
+    ax2.set_ylabel("Precip prob (%)", fontsize=9)
     ax2.set_ylim(0, 105)
-    ax2.yaxis.label.set_color("#e0e0e0")
-    ax2.tick_params(axis="y", colors="#e0e0e0")
+    ax2.tick_params(axis="y", labelsize=8)
 
     ax2b = ax2.twinx()
-    ax2b.set_facecolor("#16213e")
-    ax2b.plot(ts_local, winds, color="#a8e6cf", linewidth=1.5,
-              linestyle="--", marker="s", markersize=2, label="Wind mph")
-    ax2b.set_ylabel("Wind (mph)", color="#a8e6cf", fontsize=9)
-    ax2b.yaxis.label.set_color("#a8e6cf")
-    ax2b.tick_params(axis="y", colors="#a8e6cf")
-    ax2b.spines[:].set_color("#444466")
+    sns.lineplot(x=ts_local, y=winds, ax=ax2b, color="#27ae60",
+                 linewidth=1.5, linestyle="--", marker="s", markersize=2,
+                 label="Wind mph")
+    ax2b.set_ylabel("Wind (mph)", color="#27ae60", fontsize=9)
+    ax2b.tick_params(axis="y", labelsize=8, colors="#27ae60")
 
     # Combined legend for bottom panel
     lines1, labels1 = ax2.get_legend_handles_labels()
     lines2, labels2 = ax2b.get_legend_handles_labels()
     ax2.legend(lines1 + lines2, labels1 + labels2,
-               loc="upper right", facecolor="#1a1a2e",
-               edgecolor="#444466", labelcolor="#e0e0e0", fontsize=8)
-    ax2.grid(axis="y", color="#2a2a4a", linewidth=0.6)
+               loc="upper right", fontsize=8)
 
     # ── Shared x-axis: day separators + formatting ─────────────────────────
     ax2.xaxis.set_major_formatter(mdates.DateFormatter("%a\n%-I %p", tz=miami_tz))
     ax2.xaxis.set_major_locator(mdates.HourLocator(byhour=[0, 6, 12, 18], tz=miami_tz))
-    ax2.tick_params(axis="x", colors="#e0e0e0", labelsize=7.5)
+    ax2.tick_params(axis="x", labelsize=7.5)
 
     # Vertical day-boundary lines
     day_start = today_1am.replace(hour=0)
     for d in range(1, 4):
         boundary = day_start + timedelta(days=d)
         for ax in (ax1, ax2):
-            ax.axvline(boundary, color="#555577", linewidth=0.8, linestyle=":")
+            ax.axvline(boundary, color="#bdc3c7", linewidth=0.8, linestyle=":")
 
     fig.autofmt_xdate(rotation=0, ha="center")
     plt.tight_layout(h_pad=0.4)
-    plt.savefig(output_path, dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Chart saved → {output_path}")
 
