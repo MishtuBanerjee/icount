@@ -9,6 +9,7 @@ prints a formatted report.
 Data source: https://api.weather.gov  (no API key required)
 """
 
+import csv
 import sys
 import math
 import requests
@@ -863,6 +864,70 @@ def chart_forecast_hourly(hourly_periods, model_forecast=None,
 
 
 # ---------------------------------------------------------------------------
+# CSV export
+# ---------------------------------------------------------------------------
+
+def export_model_data_csv(features, ts_test, actuals, predictions,
+                          output_path="tbl_model_data.csv"):
+    """
+    Write a CSV combining every hourly observation and the model's test-window
+    predictions.
+
+    Columns
+    -------
+    Time        – Miami local time (UTC-5), ISO-8601
+    Temperature – observed °F for actual rows; predicted °F for forecast rows
+    Forecast    – 0 = actual observation, 1 = model prediction
+    Trimmed     – 1 = record removed by temp outlier filter, 0 = kept / n/a
+    Error       – 0 for actual rows; (predicted − actual) °F for forecast rows
+    """
+    miami_tz = timezone(timedelta(hours=-5))
+
+    # Re-derive which records were trimmed (without affecting the ML pipeline)
+    all_records = parse_hourly_observations(features)
+    kept, _     = trim_outliers(all_records)
+    kept_ts     = {r["timestamp"] for r in kept}
+
+    rows = []
+
+    # --- actual observation rows ------------------------------------------
+    for r in all_records:
+        trimmed = 0 if r["timestamp"] in kept_ts else 1
+        rows.append({
+            "Time":        r["timestamp"].astimezone(miami_tz).strftime("%Y-%m-%d %H:%M:%S"),
+            "Temperature": r["temp_f"],
+            "Forecast":    0,
+            "Trimmed":     trimmed,
+            "Error":       0,
+        })
+
+    # --- model prediction rows (test window only) -------------------------
+    for ts, actual, pred in zip(ts_test, actuals, predictions):
+        rows.append({
+            "Time":        ts.astimezone(miami_tz).strftime("%Y-%m-%d %H:%M:%S"),
+            "Temperature": round(pred, 2),
+            "Forecast":    1,
+            "Trimmed":     0,
+            "Error":       round(pred - actual, 4),
+        })
+
+    rows.sort(key=lambda r: r["Time"])
+
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=["Time", "Temperature", "Forecast", "Trimmed", "Error"]
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+    n_actual   = sum(1 for r in rows if r["Forecast"] == 0)
+    n_trimmed  = sum(1 for r in rows if r["Trimmed"]  == 1)
+    n_forecast = sum(1 for r in rows if r["Forecast"] == 1)
+    print(f"  CSV saved → {output_path}  "
+          f"({n_actual} actual rows, {n_trimmed} trimmed, {n_forecast} forecast rows)")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -913,6 +978,7 @@ def main():
             print(f"        {len(hourly_records)} hourly obs  ({n_dropped} outliers trimmed)  →  "
                   f"test window {len(ts_test)} hours")
             chart_forecast_errors(ts_test, actuals, predictions, persistence)
+            export_model_data_csv(features, ts_test, actuals, predictions)
         else:
             print("        Insufficient data for tree model evaluation.")
     except Exception as exc:
