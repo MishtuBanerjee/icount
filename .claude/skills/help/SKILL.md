@@ -30,6 +30,7 @@ Display the following list of available slash commands to the user. Do not do an
 | `/writing-plans` | Write a detailed implementation plan |
 | `/writing-skills` | Create a new skill |
 | `/simplify` | Review changed code for reuse, quality, and efficiency |
+| `/commit-message` | Write a clear, well-structured git commit message |
 
 ## Notes
 
